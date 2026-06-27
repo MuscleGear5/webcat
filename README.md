@@ -78,10 +78,14 @@ Images render at full fidelity in terminals that speak a graphics protocol —
 **kitty**, **sixel**, **iTerm2**, and modern Termux builds. chafa auto-detects
 this. In a plain terminal you still get a recognizable Unicode-block rendering.
 
-Images are height-boxed (default 14 rows, `--img-height`) so text and pictures
-fit together on screen. **All image types render**, including **SVG** (e.g.
-shields.io badges): webcat rasterizes SVG to PNG with `rsvg-convert` (librsvg)
-or ImageMagick before handing it to chafa.
+**Sizing is fit-down-only:** small images (icons, badges) keep their true
+natural size — they're never blown up — while large or tall images are scaled
+down to fit. Width is capped to your terminal; large-image height is capped by
+`--img-height` (default 24 rows).
+
+**All image types render**, including **SVG** (e.g. shields.io badges, which
+webcat rasterizes to PNG via `rsvg-convert`/ImageMagick), `data:` URIs, and
+local image files referenced from a local markdown file.
 
 ## Dependencies
 

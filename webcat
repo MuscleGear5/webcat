@@ -7,17 +7,20 @@ Pipeline: defuddle (URL -> clean markdown) -> glow (text) + chafa (images),
 stitched together in document order so images appear where they belong.
 Images render with whatever graphics protocol your terminal supports
 (kitty / sixel / iTerm2), auto-detected by chafa, with a Unicode-block
-fallback for plain terminals.
+fallback for plain terminals. Every image type renders, including SVG
+(rasterized via rsvg-convert / ImageMagick) and data: URIs. Small images keep
+their natural size; large/tall ones are scaled down to fit.
 
 Usage:
     webcat <url>                 # fetch a web page, render text + images
     webcat <file.md>             # render a local markdown file
     cat file.md | webcat         # render markdown from stdin
     webcat <url> -w 100          # set render width in columns
+    webcat <url> --img-height 16 # cap large-image height (rows)
     webcat <url> --no-images     # text only (skip image download/render)
 
-Dependencies: defuddle (for URLs), glow (text), chafa (images).
-Run ./install.sh, or see the README.
+Dependencies: defuddle (for URLs), glow (text), chafa (images),
+optionally librsvg/ImageMagick (for SVG). Run ./install.sh, or see the README.
 """
 import argparse
 import hashlib
@@ -30,7 +33,7 @@ import tempfile
 import urllib.parse
 import urllib.request
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 IMG_RE = re.compile(r'!\[[^\]]*\]\(\s*(<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\s*\)')
 
@@ -173,34 +176,78 @@ def rasterize_svg(src):
     return None
 
 
-def render_image(url, base_url, width, height):
-    chafa = which("chafa")
-    if not chafa:
-        return
+def _decode_data_uri(url):
+    """Decode a data: URI into (bytes, suffix). Returns None if not a data URI."""
+    if not url.startswith("data:"):
+        return None
+    meta, _, payload = url[5:].partition(",")
+    if not payload and "," not in url[5:]:
+        return None
+    media = meta.split(";")[0].lower()
+    ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif",
+           "image/webp": ".webp", "image/svg+xml": ".svg",
+           "image/bmp": ".bmp"}.get(media, ".img")
+    try:
+        if ";base64" in meta.lower():
+            import base64
+            return base64.b64decode(payload), ext
+        return urllib.parse.unquote_to_bytes(payload), ext
+    except Exception:
+        return None
+
+
+def localize(url, base_url, base_dir):
+    """Resolve an image reference to a local file path (downloading if needed).
+
+    Handles data: URIs, http(s) URLs, protocol-relative //urls, and local
+    files referenced from a local markdown source. Returns a path or None.
+    """
     if url.startswith("<") and url.endswith(">"):
         url = url[1:-1]
+
+    data = _decode_data_uri(url)
+    if data is not None:
+        payload, ext = data
+        tmp = os.path.join(tempfile.gettempdir(),
+                           "webcat-" + hashlib.sha1(payload).hexdigest()[:12] + ext)
+        with open(tmp, "wb") as f:
+            f.write(payload)
+        return tmp
+
     if url.startswith("//"):
         url = "https:" + url
     elif base_url and not re.match(r'^https?://', url):
         url = urllib.parse.urljoin(base_url, url)
-    if not re.match(r'^https?://', url):
-        return
-    try:
+
+    if re.match(r'^https?://', url):
         path = urllib.parse.urlparse(url).path
         suffix = os.path.splitext(path)[1] or ".img"
-        tmp = os.path.join(
-            tempfile.gettempdir(),
-            "webcat-" + hashlib.sha1(url.encode()).hexdigest()[:12] + suffix,
-        )
+        tmp = os.path.join(tempfile.gettempdir(),
+                           "webcat-" + hashlib.sha1(url.encode()).hexdigest()[:12] + suffix)
         if not os.path.exists(tmp):
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=20) as r, open(tmp, "wb") as f:
                 f.write(r.read())
+        return tmp
+
+    # A local file path (relative to the markdown's directory, or absolute).
+    local = url if os.path.isabs(url) else os.path.join(base_dir or "", url)
+    return local if os.path.isfile(local) else None
+
+
+def render_image(url, base_url, base_dir, width, height):
+    chafa = which("chafa")
+    if not chafa:
+        return
+    try:
+        tmp = localize(url, base_url, base_dir)
+        if not tmp:
+            return
         with open(tmp, "rb") as f:
             head = f.read(512)
 
         render_src = tmp
-        if path.lower().endswith(".svg") or _looks_like_svg(head):
+        if tmp.lower().endswith(".svg") or _looks_like_svg(head):
             png = rasterize_svg(tmp)
             if not png:
                 sys.stderr.write(
@@ -212,9 +259,15 @@ def render_image(url, base_url, width, height):
             return  # an HTML error page, not an image
 
         # chafa auto-detects the terminal's graphics protocol in a live TTY.
-        # Box images by height so text + image fit; aspect ratio is preserved.
-        subprocess.run(["chafa", "--size", f"{min(width, 72)}x{height}", render_src],
-                       timeout=30)
+        # --view-size is a *fit-down-only* bound (with chafa's default scale):
+        # small images (icons/badges) keep their true natural size and are
+        # never enlarged, while large/tall images are scaled down to fit the
+        # box. Cap width at the real terminal width so nothing overflows.
+        cols = shutil.get_terminal_size((80, 24)).columns
+        maxw = max(20, min(width, cols))
+        subprocess.run(
+            ["chafa", "--view-size", f"{maxw}x{height}", render_src],
+            timeout=30)
     except Exception as e:
         sys.stderr.write(f"[webcat: skipped image {url}: {e}]\n")
 
@@ -228,9 +281,10 @@ def main():
                    help="URL, markdown file, or omit to read stdin")
     p.add_argument("-w", "--width", type=int, default=100,
                    help="render width in columns (default: 100)")
-    p.add_argument("--img-height", type=int, default=14, metavar="ROWS",
-                   help="max image height in terminal rows (default: 14); "
-                        "lower = smaller images")
+    p.add_argument("--img-height", type=int, default=24, metavar="ROWS",
+                   help="max image height in rows (default: 24); caps large "
+                        "images. Small images keep their natural size and are "
+                        "never enlarged.")
     p.add_argument("--no-images", action="store_true",
                    help="skip images, render text only")
     p.add_argument("--engine", choices=["auto", "mdcat", "stitch"], default="stitch",
@@ -241,7 +295,11 @@ def main():
                    version=f"webcat {__version__}")
     args = p.parse_args()
 
-    base_url = args.source if args.source and re.match(r'^https?://', args.source) else ""
+    is_url = bool(args.source and re.match(r'^https?://', args.source))
+    base_url = args.source if is_url else ""
+    # For a local markdown file, resolve relative image paths against its dir.
+    base_dir = (os.path.dirname(os.path.abspath(args.source))
+                if args.source and not is_url and os.path.isfile(args.source) else "")
     md = get_markdown(args.source)
 
     # Pick the backend. mdcat renders text + images natively in one pass;
@@ -263,7 +321,7 @@ def main():
     pos = 0
     for m in IMG_RE.finditer(md):
         render_text(md[pos:m.start()], args.width)
-        render_image(m.group(1), base_url, args.width, args.img_height)
+        render_image(m.group(1), base_url, base_dir, args.width, args.img_height)
         pos = m.end()
     render_text(md[pos:], args.width)
 

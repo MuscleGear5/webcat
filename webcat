@@ -31,10 +31,11 @@ import struct
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 IMG_RE = re.compile(r'!\[[^\]]*\]\(\s*(<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\s*\)')
 
@@ -90,7 +91,7 @@ def run_defuddle(url):
 
 
 def get_markdown(src):
-    if src is None:
+    if src is None or src == "-":
         return sys.stdin.read()
     if re.match(r'^https?://', src):
         return run_defuddle(src)
@@ -226,7 +227,19 @@ def localize(url, base_url, base_dir):
         tmp = os.path.join(tempfile.gettempdir(),
                            "webcat-" + hashlib.sha1(url.encode()).hexdigest()[:12] + suffix)
         if not os.path.exists(tmp):
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            headers = {
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                              "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                "Accept": "image/avif,image/webp,image/png,image/*,*/*;q=0.8",
+            }
+            # Many CDNs hotlink-protect images: they only serve them when the
+            # request's Referer/Origin matches the embedding page. Send the page
+            # URL (or the image's own origin) so those requests succeed.
+            ref = base_url or url
+            headers["Referer"] = ref
+            origin = urllib.parse.urlparse(ref)
+            headers["Origin"] = f"{origin.scheme}://{origin.netloc}"
+            req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=20) as r, open(tmp, "wb") as f:
                 f.write(r.read())
         return tmp
@@ -328,6 +341,15 @@ def render_image(url, base_url, base_dir, width, height, threshold):
         else:
             cmd = ["chafa", "--size", box, render_src]
         subprocess.run(cmd, timeout=30)
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            reason = ("access denied — hotlink-protected or an expired/signed "
+                      "link that only works from the original page")
+        elif e.code == 404:
+            reason = "not found (404)"
+        else:
+            reason = f"HTTP {e.code}"
+        sys.stderr.write(f"[webcat: skipped image — {reason}]\n")
     except Exception as e:
         sys.stderr.write(f"[webcat: skipped image {url}: {e}]\n")
 

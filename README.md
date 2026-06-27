@@ -88,6 +88,15 @@ width so they aren't tiny on high-DPI screens, capped at `--img-height` rows
 webcat rasterizes to PNG via `rsvg-convert`/ImageMagick), `data:` URIs, and
 local image files referenced from a local markdown file.
 
+## Notes
+
+- **`[webcat: skipped image — access denied ...]`** means the server refused to
+  serve that image (HTTP 401/403). webcat sends a `Referer`/`Origin` matching
+  the page, which satisfies most hotlink protection — but some CDNs use
+  **signed, expiring URLs** tied to the original page session, which can't be
+  fetched separately by anything. Those are skipped; the rest of the page still
+  renders.
+
 ## Dependencies
 
 - **python3** — runs webcat (no third-party Python packages)

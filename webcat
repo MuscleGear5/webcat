@@ -27,13 +27,14 @@ import hashlib
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import urllib.parse
 import urllib.request
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 IMG_RE = re.compile(r'!\[[^\]]*\]\(\s*(<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\s*\)')
 
@@ -235,7 +236,60 @@ def localize(url, base_url, base_dir):
     return local if os.path.isfile(local) else None
 
 
-def render_image(url, base_url, base_dir, width, height):
+def _jpeg_size(path):
+    try:
+        with open(path, "rb") as f:
+            f.read(2)
+            while True:
+                b = f.read(1)
+                if not b:
+                    return None
+                if b != b"\xff":
+                    continue
+                marker = f.read(1)
+                while marker == b"\xff":
+                    marker = f.read(1)
+                if marker[0] in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+                                 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                    f.read(3)
+                    h, w = struct.unpack(">HH", f.read(4))
+                    return w, h
+                ln = struct.unpack(">H", f.read(2))[0]
+                f.seek(ln - 2, 1)
+    except Exception:
+        return None
+
+
+def image_size(path):
+    """Return (width, height) in pixels, or None. Pure-header for common
+    formats; falls back to ImageMagick `identify`."""
+    try:
+        with open(path, "rb") as f:
+            h = f.read(32)
+    except Exception:
+        return None
+    if h[:8] == b"\x89PNG\r\n\x1a\n":
+        return struct.unpack(">II", h[16:24])
+    if h[:6] in (b"GIF87a", b"GIF89a"):
+        return struct.unpack("<HH", h[6:10])
+    if h[:2] == b"BM":
+        w, ht = struct.unpack("<ii", h[18:26])
+        return abs(w), abs(ht)
+    if h[:2] == b"\xff\xd8":
+        return _jpeg_size(path)
+    im = which("identify")
+    if im:
+        r = subprocess.run([im, "-format", "%w %h", path + "[0]"],
+                           capture_output=True, text=True)
+        try:
+            w, ht = r.stdout.split()[:2]
+            return int(w), int(ht)
+        except Exception:
+            pass
+    return None
+
+
+def render_image(url, base_url, base_dir, width, height, threshold):
     chafa = which("chafa")
     if not chafa:
         return
@@ -258,16 +312,22 @@ def render_image(url, base_url, base_dir, width, height):
         elif _looks_like_html(head):
             return  # an HTML error page, not an image
 
-        # chafa auto-detects the terminal's graphics protocol in a live TTY.
-        # --view-size is a *fit-down-only* bound (with chafa's default scale):
-        # small images (icons/badges) keep their true natural size and are
-        # never enlarged, while large/tall images are scaled down to fit the
-        # box. Cap width at the real terminal width so nothing overflows.
+        # Cap width at the real terminal width so nothing overflows.
         cols = shutil.get_terminal_size((80, 24)).columns
         maxw = max(20, min(width, cols))
-        subprocess.run(
-            ["chafa", "--view-size", f"{maxw}x{height}", render_src],
-            timeout=30)
+        box = f"{maxw}x{height}"
+
+        # Small images (icons/badges) below the pixel threshold keep their true
+        # natural size — never enlarged — via --view-size (fit-down-only).
+        # Larger content images are scaled UP to fill the width via --size, so
+        # they're not tiny on high-DPI screens. Aspect ratio is preserved.
+        dims = image_size(render_src)
+        is_small = dims is not None and dims[0] < threshold and dims[1] < threshold
+        if is_small:
+            cmd = ["chafa", "--view-size", box, render_src]
+        else:
+            cmd = ["chafa", "--size", box, render_src]
+        subprocess.run(cmd, timeout=30)
     except Exception as e:
         sys.stderr.write(f"[webcat: skipped image {url}: {e}]\n")
 
@@ -283,8 +343,11 @@ def main():
                    help="render width in columns (default: 100)")
     p.add_argument("--img-height", type=int, default=24, metavar="ROWS",
                    help="max image height in rows (default: 24); caps large "
-                        "images. Small images keep their natural size and are "
-                        "never enlarged.")
+                        "images that are scaled up to fill the width.")
+    p.add_argument("--img-threshold", type=int, default=200, metavar="PX",
+                   help="images smaller than this (both dimensions, in pixels) "
+                        "keep their true size and are never enlarged; larger "
+                        "ones scale up to fill the width (default: 200)")
     p.add_argument("--no-images", action="store_true",
                    help="skip images, render text only")
     p.add_argument("--engine", choices=["auto", "mdcat", "stitch"], default="stitch",
@@ -321,7 +384,8 @@ def main():
     pos = 0
     for m in IMG_RE.finditer(md):
         render_text(md[pos:m.start()], args.width)
-        render_image(m.group(1), base_url, base_dir, args.width, args.img_height)
+        render_image(m.group(1), base_url, base_dir, args.width,
+                     args.img_height, args.img_threshold)
         pos = m.end()
     render_text(md[pos:], args.width)
 

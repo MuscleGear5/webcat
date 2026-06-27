@@ -28,10 +28,11 @@ It walks the markdown in order, sending text to glow and image URLs to chafa, so
 
 webcat has two rendering engines, selectable with `--engine`:
 
-- **`stitch`** (default deps) — glow for text + chafa for images, stitched together. Portable; only needs glow and chafa.
-- **`mdcat`** — if [mdcat](https://github.com/swsnr/mdcat) is installed, it renders text *and* inline images natively in a single pass. webcat finds it on `PATH` or in `~/.cargo/bin`.
+- **`stitch`** (**default**) — glow for text + chafa for images, stitched together. Most compatible: chafa auto-detects the widest range of terminal graphics protocols. Only needs glow and chafa.
+- **`mdcat`** — if [mdcat](https://github.com/swsnr/mdcat) is installed, it renders text *and* inline images natively in a single pass. webcat finds it on `PATH` or in `~/.cargo/bin`. Note: mdcat supports fewer terminals than chafa, so images may not appear everywhere.
+- **`auto`** — use mdcat if present, else fall back to stitch.
 
-`--engine auto` (the default) uses mdcat when present and falls back to stitch otherwise.
+If images don't render with one engine, try the other: `--engine stitch` is the safe bet.
 
 ## Install
 

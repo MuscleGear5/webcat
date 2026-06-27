@@ -171,9 +171,10 @@ def main():
                    help="render width in columns (default: 100)")
     p.add_argument("--no-images", action="store_true",
                    help="skip images, render text only")
-    p.add_argument("--engine", choices=["auto", "mdcat", "stitch"], default="auto",
-                   help="rendering backend: mdcat (native), stitch (glow+chafa), "
-                        "or auto (mdcat if available; default)")
+    p.add_argument("--engine", choices=["auto", "mdcat", "stitch"], default="stitch",
+                   help="rendering backend: stitch (glow+chafa, default — most "
+                        "compatible), mdcat (native single-pass, needs a terminal "
+                        "mdcat supports), or auto (mdcat if available, else stitch)")
     p.add_argument("-V", "--version", action="version",
                    version=f"webcat {__version__}")
     args = p.parse_args()

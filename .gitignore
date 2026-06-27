@@ -1,0 +1,11 @@
+# transient renders
+webcat-*.png
+webcat-*.img
+*.tmp
+
+# python
+__pycache__/
+*.pyc
+
+# os
+.DS_Store

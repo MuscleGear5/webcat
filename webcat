@@ -30,7 +30,7 @@ import tempfile
 import urllib.parse
 import urllib.request
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 IMG_RE = re.compile(r'!\[[^\]]*\]\(\s*(<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\s*\)')
 
@@ -133,8 +133,18 @@ def render_text(md, width):
         sys.stdout.write(md)  # graceful fallback: raw markdown
 
 
-def render_image(url, base_url, width):
-    if not have("chafa"):
+def _is_unrenderable(head):
+    """chafa aborts on SVG (no librsvg) and can't draw HTML error pages.
+
+    Detect those by content sniffing so one bad image can't kill the run.
+    """
+    s = head.lstrip()[:64].lower()
+    return s.startswith((b"<?xml", b"<svg", b"<!doctype", b"<html"))
+
+
+def render_image(url, base_url, width, height):
+    chafa = which("chafa")
+    if not chafa:
         return
     if url.startswith("<") and url.endswith(">"):
         url = url[1:-1]
@@ -143,6 +153,9 @@ def render_image(url, base_url, width):
     elif base_url and not re.match(r'^https?://', url):
         url = urllib.parse.urljoin(base_url, url)
     if not re.match(r'^https?://', url):
+        return
+    # Skip SVG badges by URL hint before even downloading.
+    if urllib.parse.urlparse(url).path.lower().endswith(".svg"):
         return
     try:
         suffix = os.path.splitext(urllib.parse.urlparse(url).path)[1] or ".img"
@@ -154,8 +167,14 @@ def render_image(url, base_url, width):
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=20) as r, open(tmp, "wb") as f:
                 f.write(r.read())
+        with open(tmp, "rb") as f:
+            if _is_unrenderable(f.read(256)):
+                return
         # chafa auto-detects the terminal's graphics protocol in a live TTY.
-        subprocess.run(["chafa", "--size", f"{min(width, 80)}x24", tmp])
+        # Box images small (height-limited) so text + image fit on screen;
+        # aspect ratio is preserved within the box.
+        subprocess.run(["chafa", "--size", f"{min(width, 72)}x{height}", tmp],
+                       timeout=30)
     except Exception as e:
         sys.stderr.write(f"[webcat: skipped image {url}: {e}]\n")
 
@@ -169,6 +188,9 @@ def main():
                    help="URL, markdown file, or omit to read stdin")
     p.add_argument("-w", "--width", type=int, default=100,
                    help="render width in columns (default: 100)")
+    p.add_argument("--img-height", type=int, default=14, metavar="ROWS",
+                   help="max image height in terminal rows (default: 14); "
+                        "lower = smaller images")
     p.add_argument("--no-images", action="store_true",
                    help="skip images, render text only")
     p.add_argument("--engine", choices=["auto", "mdcat", "stitch"], default="stitch",
@@ -201,7 +223,7 @@ def main():
     pos = 0
     for m in IMG_RE.finditer(md):
         render_text(md[pos:m.start()], args.width)
-        render_image(m.group(1), base_url, args.width)
+        render_image(m.group(1), base_url, args.width, args.img_height)
         pos = m.end()
     render_text(md[pos:], args.width)
 

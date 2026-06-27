@@ -67,6 +67,7 @@ webcat <url>              # fetch a web page, render text + images
 webcat <file.md>          # render a local markdown file
 cat file.md | webcat      # render markdown from stdin
 webcat <url> -w 80        # set render width (columns)
+webcat <url> --img-height 10   # smaller images (default 14 rows)
 webcat <url> --no-images  # text only
 webcat --help
 ```
@@ -76,6 +77,10 @@ webcat --help
 Images render at full fidelity in terminals that speak a graphics protocol —
 **kitty**, **sixel**, **iTerm2**, and modern Termux builds. chafa auto-detects
 this. In a plain terminal you still get a recognizable Unicode-block rendering.
+
+Images are height-boxed (default 14 rows, `--img-height`) so text and pictures
+fit together on screen. **SVG** images (e.g. shields.io badges) are skipped —
+chafa can't rasterize them without librsvg, and they'd otherwise be noise.
 
 ## Dependencies
 

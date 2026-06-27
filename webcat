@@ -30,9 +30,12 @@ import tempfile
 import urllib.parse
 import urllib.request
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 IMG_RE = re.compile(r'!\[[^\]]*\]\(\s*(<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\s*\)')
+
+# Tools may live outside PATH (e.g. a cargo-installed mdcat in ~/.cargo/bin).
+EXTRA_BIN = [os.path.expanduser("~/.cargo/bin")]
 
 
 def die(msg, code=1):
@@ -40,8 +43,19 @@ def die(msg, code=1):
     sys.exit(code)
 
 
+def which(tool):
+    found = shutil.which(tool)
+    if found:
+        return found
+    for d in EXTRA_BIN:
+        cand = os.path.join(d, tool)
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
 def have(tool):
-    return shutil.which(tool) is not None
+    return which(tool) is not None
 
 
 def run_defuddle(url):
@@ -81,6 +95,33 @@ def get_markdown(src):
             return f.read()
     except OSError as e:
         die(f"cannot read {src}: {e}")
+
+
+def absolutize_images(md, base_url):
+    """Rewrite relative image URLs to absolute so backends can fetch them."""
+    if not base_url:
+        return md
+
+    def repl(m):
+        url = m.group(1)
+        bare = url[1:-1] if url.startswith("<") and url.endswith(">") else url
+        if bare.startswith("//"):
+            new = "https:" + bare
+        elif not re.match(r'^https?://', bare):
+            new = urllib.parse.urljoin(base_url, bare)
+        else:
+            new = bare
+        return m.group(0).replace(url, new, 1)
+
+    return IMG_RE.sub(repl, md)
+
+
+def render_with_mdcat(md, base_url, width):
+    """Render the whole document (text + inline images) with mdcat in one pass."""
+    md = absolutize_images(md, base_url)
+    cmd = [which("mdcat"), "--columns", str(width)]
+    proc = subprocess.run(cmd, input=md, text=True)
+    return proc.returncode == 0
 
 
 def render_text(md, width):
@@ -130,12 +171,27 @@ def main():
                    help="render width in columns (default: 100)")
     p.add_argument("--no-images", action="store_true",
                    help="skip images, render text only")
+    p.add_argument("--engine", choices=["auto", "mdcat", "stitch"], default="auto",
+                   help="rendering backend: mdcat (native), stitch (glow+chafa), "
+                        "or auto (mdcat if available; default)")
     p.add_argument("-V", "--version", action="version",
                    version=f"webcat {__version__}")
     args = p.parse_args()
 
     base_url = args.source if args.source and re.match(r'^https?://', args.source) else ""
     md = get_markdown(args.source)
+
+    # Pick the backend. mdcat renders text + images natively in one pass;
+    # the stitch backend pairs glow (text) with chafa (images).
+    use_mdcat = (
+        not args.no_images
+        and args.engine in ("auto", "mdcat")
+        and have("mdcat")
+    )
+    if args.engine == "mdcat" and not have("mdcat"):
+        die("--engine mdcat requested but mdcat not found")
+    if use_mdcat and render_with_mdcat(md, base_url, args.width):
+        return
 
     if args.no_images:
         render_text(md, args.width)

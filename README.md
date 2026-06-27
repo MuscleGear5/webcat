@@ -24,6 +24,15 @@ webcat is a small orchestrator over three excellent tools:
 
 It walks the markdown in order, sending text to glow and image URLs to chafa, so everything lands where it belongs.
 
+### Backends
+
+webcat has two rendering engines, selectable with `--engine`:
+
+- **`stitch`** (default deps) — glow for text + chafa for images, stitched together. Portable; only needs glow and chafa.
+- **`mdcat`** — if [mdcat](https://github.com/swsnr/mdcat) is installed, it renders text *and* inline images natively in a single pass. webcat finds it on `PATH` or in `~/.cargo/bin`.
+
+`--engine auto` (the default) uses mdcat when present and falls back to stitch otherwise.
+
 ## Install
 
 ```sh

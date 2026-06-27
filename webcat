@@ -30,7 +30,7 @@ import tempfile
 import urllib.parse
 import urllib.request
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 IMG_RE = re.compile(r'!\[[^\]]*\]\(\s*(<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\s*\)')
 
@@ -133,13 +133,44 @@ def render_text(md, width):
         sys.stdout.write(md)  # graceful fallback: raw markdown
 
 
-def _is_unrenderable(head):
-    """chafa aborts on SVG (no librsvg) and can't draw HTML error pages.
+def _looks_like_svg(head):
+    s = head.lstrip()[:512].lower()
+    return s.startswith(b"<svg") or (s.startswith(b"<?xml") and b"<svg" in s)
 
-    Detect those by content sniffing so one bad image can't kill the run.
-    """
+
+def _looks_like_html(head):
     s = head.lstrip()[:64].lower()
-    return s.startswith((b"<?xml", b"<svg", b"<!doctype", b"<html"))
+    return s.startswith((b"<!doctype html", b"<html"))
+
+
+def rasterize_svg(src):
+    """Convert an SVG to PNG so chafa can render it. Returns a PNG path or None.
+
+    Tries rsvg-convert (librsvg) first, then ImageMagick (magick/convert).
+    """
+    out = src + ".png"
+    rsvg = which("rsvg-convert")
+    if rsvg:
+        try:
+            r = subprocess.run([rsvg, "-w", "640", src, "-o", out],
+                               timeout=30, capture_output=True)
+            if r.returncode == 0 and os.path.getsize(out) > 0:
+                return out
+        except Exception:
+            pass
+    for name in ("magick", "convert"):
+        im = which(name)
+        if not im:
+            continue
+        try:
+            r = subprocess.run(
+                [im, "-background", "none", "-density", "150", src, out],
+                timeout=30, capture_output=True)
+            if r.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
+                return out
+        except Exception:
+            pass
+    return None
 
 
 def render_image(url, base_url, width, height):
@@ -154,11 +185,9 @@ def render_image(url, base_url, width, height):
         url = urllib.parse.urljoin(base_url, url)
     if not re.match(r'^https?://', url):
         return
-    # Skip SVG badges by URL hint before even downloading.
-    if urllib.parse.urlparse(url).path.lower().endswith(".svg"):
-        return
     try:
-        suffix = os.path.splitext(urllib.parse.urlparse(url).path)[1] or ".img"
+        path = urllib.parse.urlparse(url).path
+        suffix = os.path.splitext(path)[1] or ".img"
         tmp = os.path.join(
             tempfile.gettempdir(),
             "webcat-" + hashlib.sha1(url.encode()).hexdigest()[:12] + suffix,
@@ -168,12 +197,23 @@ def render_image(url, base_url, width, height):
             with urllib.request.urlopen(req, timeout=20) as r, open(tmp, "wb") as f:
                 f.write(r.read())
         with open(tmp, "rb") as f:
-            if _is_unrenderable(f.read(256)):
+            head = f.read(512)
+
+        render_src = tmp
+        if path.lower().endswith(".svg") or _looks_like_svg(head):
+            png = rasterize_svg(tmp)
+            if not png:
+                sys.stderr.write(
+                    f"[webcat: cannot rasterize SVG {url} — install librsvg "
+                    f"or imagemagick]\n")
                 return
+            render_src = png
+        elif _looks_like_html(head):
+            return  # an HTML error page, not an image
+
         # chafa auto-detects the terminal's graphics protocol in a live TTY.
-        # Box images small (height-limited) so text + image fit on screen;
-        # aspect ratio is preserved within the box.
-        subprocess.run(["chafa", "--size", f"{min(width, 72)}x{height}", tmp],
+        # Box images by height so text + image fit; aspect ratio is preserved.
+        subprocess.run(["chafa", "--size", f"{min(width, 72)}x{height}", render_src],
                        timeout=30)
     except Exception as e:
         sys.stderr.write(f"[webcat: skipped image {url}: {e}]\n")

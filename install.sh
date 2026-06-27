@@ -64,6 +64,15 @@ else
     pm_install chafa || warn "Could not install chafa automatically — see https://hpjansson.org/chafa/"
 fi
 
+# ---- librsvg (rasterize SVG images so chafa can draw them) ------------------
+if have rsvg-convert || have magick || have convert; then
+    say "SVG rasterizer already installed"
+else
+    say "Installing librsvg (SVG -> PNG)..."
+    pm_install librsvg || pm_install rsvg || \
+        warn "Could not install librsvg — SVG images (e.g. badges) won't render"
+fi
+
 # ---- defuddle (URL -> clean markdown, via npm) ------------------------------
 if have defuddle; then
     say "defuddle already installed"
@@ -92,7 +101,7 @@ esac
 # ---- summary ----------------------------------------------------------------
 echo
 say "Done. Dependency status:"
-for t in python3 glow chafa defuddle; do
+for t in python3 glow chafa rsvg-convert defuddle; do
     if have "$t"; then printf '   \033[32m✓\033[0m %s\n' "$t"
     else               printf '   \033[31m✗\033[0m %s (missing)\n' "$t"; fi
 done

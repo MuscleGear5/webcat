@@ -79,8 +79,9 @@ Images render at full fidelity in terminals that speak a graphics protocol —
 this. In a plain terminal you still get a recognizable Unicode-block rendering.
 
 Images are height-boxed (default 14 rows, `--img-height`) so text and pictures
-fit together on screen. **SVG** images (e.g. shields.io badges) are skipped —
-chafa can't rasterize them without librsvg, and they'd otherwise be noise.
+fit together on screen. **All image types render**, including **SVG** (e.g.
+shields.io badges): webcat rasterizes SVG to PNG with `rsvg-convert` (librsvg)
+or ImageMagick before handing it to chafa.
 
 ## Dependencies
 
@@ -88,6 +89,7 @@ chafa can't rasterize them without librsvg, and they'd otherwise be noise.
 - **glow** — markdown text rendering
 - **chafa** — terminal image rendering
 - **defuddle** — URL → markdown (only needed for URLs; local `.md` works without it)
+- **librsvg** (`rsvg-convert`) or **ImageMagick** — optional; rasterizes SVG images so they render
 
 ## License
 
